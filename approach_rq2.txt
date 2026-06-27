@@ -1,0 +1,129 @@
+Traffic Demand Prediction - RQ2 Approach (Refined)
+
+1. Problem Statement
+Predict traffic demand for day 49 (test set) using spatial, temporal, and environmental features from days 1-48 (training set). The target is highly granular (small float values), and the evaluation metric is R² score. Key insight: day 49 patterns are likely similar to day 48 patterns.
+
+2. Tools Used
+- Language: Python 3.12
+- Libraries: Pandas, NumPy, Scikit-Learn, LightGBM, PyGeohash
+- Environment: VS Code / Jupyter Notebook
+- Model: LightGBM only (multi-seed ensemble for stability)
+
+3. Data Strategy
+The dataset structure:
+  • Training: Days 1-49 (complete daily cycles)
+  • Test: Day 49 continuation (likely early morning hours, partial day)
+
+Key observation: Day 48 demand patterns should be highly predictive of day 49 demand patterns at the same location and time slot.
+
+4. Feature Engineering Pipeline
+
+4.1 Geospatial Features
+- Decode geohash to latitude & longitude using pygeohash
+- Create geohash hierarchies: geo3 (city), geo4 (neighborhood)
+  Purpose: Capture multi-scale geographic patterns
+
+4.2 Temporal Features
+- Parse timestamp (HH:MM format) → hour, minute
+- Create time_slot: hour * 4 + (minute // 15)  [96 slots per day, 15-min granularity]
+- Cyclical encoding:
+  • hour_sin/cos: 2π * hour / 24
+  • slot_sin/cos: 2π * time_slot / 96
+  Purpose: Represent circular nature of time; avoid "23 is far from 0" discontinuity
+
+4.3 Context Features
+- is_weekend: 1 if day % 7 in [0, 6], else 0
+- is_rush: 1 if hour in [7,8,9,17,18,19], else 0
+- lanes_x_slot: NumberofLanes * time_slot
+  Purpose: Capture rush hour and road capacity interactions
+
+4.4 **GOLDEN LAG FEATURE: Day 48 → Day 49 Prediction**
+The core innovation. For each test row (day 49):
+  1. Primary: Look for exact match in day 48 (geohash + timestamp)
+  2. Secondary: If no exact, search adjacent time slots (±1, ±2, ±4, ±8 slots, up to ±2 hours)
+  3. Tertiary: If still no match, use geohash-level average from day 48
+  4. Fallback: Use global median for that time_slot
+  Result: demand_lag_d1 (almost 100% coverage without leakage)
+
+4.5 Day Ratio Adjustment
+- Calculate geo49_mean / geo48_mean for each geohash
+- Clip to [0.1, 5.0] to avoid extreme ratios from low-volume locations
+- Apply: lag_adjusted = demand_lag_d1 * day_ratio
+  Purpose: Account for day-to-day trend shifts (e.g., Monday vs Friday)
+
+4.6 Day 49 Early Morning Context
+- Extract day 49 early hours (00:00-02:00) already known from training
+- d49e_mean & d49e_max: geohash-level aggregates from known day 49 data
+  Purpose: Ground test predictions in observed day 49 behavior
+
+4.7 K-Fold Target Encoding
+For categorical features: geohash, geo3, geo4, geo_slot, geo_hour, RoadType, Weather, road_hour, road_slot
+- Compute target encoding (mean demand) within each K-fold training split (5 folds)
+- Prevents target leakage: validation set never sees its own statistics
+- Use global statistics for test set fill
+  Purpose: Encode high-cardinality categories without data leakage
+
+4.8 Missing Value Handling
+- Temperature: Group-filled by geohash, then global median
+- Categorical (RoadType, Weather, LargeVehicles, Landmarks): Filled with 'Unknown'
+- Final numeric alignment: coerce to float, fill remaining 0s
+
+5. Feature Set (28 total)
+Spatial:     latitude, longitude
+Temporal:    hour, minute, time_slot, slot_sin, slot_cos, hour_sin, hour_cos, is_weekend, is_rush
+Context:     NumberofLanes, Temperature, lanes_x_slot
+Lag/Trend:   demand_lag_d1, lag_adjusted, day_ratio, d49e_mean, d49e_max
+Encoded (9): geohash_te, geo3_te, geo4_te, geo_slot_te, geo_hour_te, RoadType_te, Weather_te, road_hour_te, road_slot_te
+
+6. Model Training: Multi-Seed LightGBM Ensemble
+
+6.1 Algorithm: LightGBM (proven 91.3 CV score, most robust)
+Why LightGBM only?
+  - Simpler than 3-model blend, reduces overfitting risk
+  - Handles mixed feature types naturally (numerical + encoded)
+  - Consistent reproducibility with seed control
+
+6.2 Multi-Seed Strategy
+Train 3 independent LightGBM models with seeds: [42, 2024, 888]
+- Each seed: 5-fold cross-validation on full training set
+- Predictions averaged equally across seeds & folds → final_preds
+
+6.3 LightGBM Hyperparameters
+n_estimators:     3000      (boosting rounds, early stop may reduce)
+learning_rate:    0.02      (conservative, prevents overfitting)
+num_leaves:       127       (balanced complexity)
+max_depth:        8         (shallow trees, more stable)
+subsample:        0.8       (row subsampling)
+colsample_bytree: 0.7       (feature subsampling)
+reg_alpha:        0.1       (L1 regularization)
+reg_lambda:       1.0       (L2 regularization)
+min_child_samples:10        (leaf size)
+
+6.4 Early Stopping
+- Monitor: eval_set on validation fold
+- Patience: 150 rounds (stop if validation metric doesn't improve)
+- Purpose: Prevent overfitting while ensuring sufficient learning
+
+7. Ensemble & Aggregation
+- Out-of-Fold (OOF) predictions: Combine across all 5 folds per seed
+- Test predictions: Average across 5 folds × 3 seeds = 15 models
+- Reported OOF R²: Average across seeds
+  (Expected: ~0.91-0.92)
+
+8. Post-Processing & Submission
+- Clip predictions: np.clip(final_preds, 0, None)  [no negative demand]
+- Sort by Index (ascending)
+- Save: submissions/submission_final.csv
+
+9. Expected Performance
+Local CV R² Score: ~0.913 (proven track record from rq2)
+Public LB: Likely competitive, may vary ±0.02-0.03 due to test distribution shifts
+
+10. Key Innovations Over V1 (solution.ipynb)
+✓ Lag features from day48 → day49 (powerful temporal signal)
+✓ Smart fallback strategy (robust, minimizes NaNs)
+✓ Day ratio adjustment (captures trend shifts)
+✓ K-fold target encoding (prevents leakage)
+✓ Multi-seed ensemble (stability)
+✓ LightGBM only (simplicity + proven score)
+→ Result: Higher CV R² (0.913 vs 0.89) and more stable predictions

@@ -1,0 +1,54 @@
+Traffic Demand Prediction - Solution v7 Approach and Methodology
+
+1. Problem Statement
+The objective is to predict traffic demand (a highly right-skewed continuous variable with tiny float values) based on spatial, temporal, and environmental features. The evaluation metric is the R² score.
+
+2. Tools Used
+- Language: Python 3.12
+- Libraries: Pandas, NumPy, Scikit-Learn, LightGBM, ExtraTreesRegressor
+- Environment: VS Code / Jupyter Notebook
+- No external geohash library (custom decode implementation)
+
+3. Data Preprocessing
+- Time Parsing: Extracted 'hour' and 'minute' from the 'timestamp' column (which was in "hour:minute" format) to create granular time features (time_slot: hour*4 + minute//15).
+- Smart Imputation: Missing 'Temperature' values were filled using the median temperature of the specific geohash (location-based weather). Missing 'Weather', 'RoadType', and 'LargeVehicles' were filled with "Unknown" category.
+- Outlier Handling: Deliberately avoided removing outliers. High-demand spikes are natural traffic patterns, and removing them severely restricts the model's ability to predict peak demands.
+
+4. Feature Engineering
+- Geohash Decoding: Custom BASE32 decoding (no pygeohash dependency) to extract exact latitude and longitude coordinates. Hierarchical prefixes (geo3, geo4, geo5) extracted for neighborhood-level learning.
+- Cyclic Time Encoding: Applied sine and cosine transformations to hour (24-cycle) and time_slot (96-cycle) to capture circular time patterns (e.g., 23:45 is close to 00:00).
+- Temporal Flags: is_weekend, is_rush (7-9h, 17-19h), is_night (0-5h) to encode domain knowledge about traffic patterns.
+- Lag Features (Day 48 baseline): Vectorized extraction of exact-match lag (day 48 same timestamp), slot-based lag with time offsets (±1,2,4,8 slots), hierarchical fallback (geo level, then time_slot median).
+- Lag-Derived Signals:
+  * day_ratio: Day49/Day48 demand ratio by geohash (clipped 0.1-5.0)
+  * geo_2am_ratio: Day49 2:00 / Day48 2:00 demand ratio (clipped 0.1-10.0)
+  * lag_adjusted: lag × day_ratio
+  * lag_interp: lag × geo_2am_ratio
+  * lag_norm: lag / geo_max (normalized lag)
+- Aggregations: Grouped statistics by geohash (mean, max, last), geo5 (mean by time_slot), RoadType×hour, RoadType×time_slot.
+- K-Fold Target Encoding: Applied 5-fold target encoding to categorical features (geohash, geo3/4/5, geo_slot, geo_hour, geo5_slot, RoadType, Weather, road_hour, road_slot) to prevent leakage.
+- Feature Interactions: lanes_x_slot (NumberofLanes × time_slot).
+
+5. Modeling Strategy
+- Model A - LightGBM Ensemble (3 seeds):
+  * 3 independent seeds (42, 2024, 888), each with 5-fold cross-validation = 15 total folds
+  * Hyperparameters: 3000 estimators, lr=0.02, num_leaves=127, max_depth=8, subsample=0.8, colsample_bytree=0.7
+  * Early stopping on validation with 150 rounds patience
+  * Reason: Outperforms HGBT on day49 OOF (0.9578 vs 0.9542)
+- Model B - ExtraTreesRegressor (1 seed):
+  * Single seed (2024), 5-fold cross-validation
+  * Parameters: 200 estimators, max_features=0.5, min_samples_leaf=5
+  * Provides diversity to the ensemble
+- OOF Blend Search:
+  * Computed OOF (out-of-fold) predictions for all folds on training data
+  * Grid searched blend weights (0.30 to 0.95) optimized on day49 OOF R² only
+  * Final blend: LGB_weight × LGB_preds + ET_weight × ET_preds
+  * Reason: Day 49 performance is the primary evaluation target
+- Post-Processing: Final predictions clipped at 0 (no negative demand).
+
+6. Results
+- OOF Metrics:
+  * Full OOF R²: ~0.977
+  * Day 49 OOF R²: ~0.9578 (primary optimization target)
+  * Blend strength determined by day49 performance
+- Submission: saved to ../submissions/submission_v7.csv with 100×R² score

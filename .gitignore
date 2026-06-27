@@ -1,1 +1,69 @@
+# Agents / Skills
+.agents/
+skills-lock.json
+
+# Data
 data/dataset/*.csv
+data/dataset/*.parquet
+data/dataset/*.json
+data/raw/
+data/processed/
+*.csv
+*.parquet
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.Python
+
+# Virtual env
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ML / models
+*.pkl
+*.pickle
+*.joblib
+*.h5
+*.hdf5
+*.onnx
+models/
+outputs/
+catboost_info/
+notebooks/catboost_info/
+
+# Node
+node_modules/
+.node_modules/
+package-lock.json
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+maintainlogs.txt
+
+# Submissions (keep folder, ignore zips/outputs if needed)
+submissions/*.zip
